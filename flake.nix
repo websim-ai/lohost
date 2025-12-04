@@ -76,17 +76,20 @@
 
           dontUnpack = true;
 
-          installPhase = ''
+          installPhase = let
+            preloadVar = if isDarwin then "DYLD_INSERT_LIBRARIES" else "LD_PRELOAD";
+          in ''
             mkdir -p $out/bin
 
             # Install the binary
             cp $src $out/bin/.lohost-unwrapped
             chmod +x $out/bin/.lohost-unwrapped
 
-            # Create wrapper that sets native lib path
+            # Create wrapper that sets native lib path and preloads it
             cat > $out/bin/lohost <<EOF
 #!/bin/sh
 export LOHOST_NATIVE_LIB="${lohost-dns}/lib/${libName}"
+export ${preloadVar}="\$LOHOST_NATIVE_LIB"
 exec $out/bin/.lohost-unwrapped "\$@"
 EOF
             chmod +x $out/bin/lohost
@@ -113,7 +116,9 @@ EOF
             bun build --compile --outfile lohost-bin src/index.ts
           '';
 
-          installPhase = ''
+          installPhase = let
+            preloadVar = if isDarwin then "DYLD_INSERT_LIBRARIES" else "LD_PRELOAD";
+          in ''
             mkdir -p $out/bin
 
             cp lohost-bin $out/bin/.lohost-unwrapped
@@ -122,6 +127,7 @@ EOF
             cat > $out/bin/lohost <<EOF
 #!/bin/sh
 export LOHOST_NATIVE_LIB="${lohost-dns}/lib/${libName}"
+export ${preloadVar}="\$LOHOST_NATIVE_LIB"
 exec $out/bin/.lohost-unwrapped "\$@"
 EOF
             chmod +x $out/bin/lohost
