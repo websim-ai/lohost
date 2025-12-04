@@ -92,8 +92,12 @@ export class LohostDaemon {
       return;
     }
 
+    // Check X-Lohost-Host first (for Workers that can't override Host header),
+    // then fall back to standard Host header
+    const routingHost = (req.headers["x-lohost-host"] as string | undefined) || req.headers.host;
+
     // Extract subdomain from host
-    const subdomain = this.extractSubdomain(req.headers.host);
+    const subdomain = this.extractSubdomain(routingHost);
     if (!subdomain) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
@@ -123,7 +127,10 @@ export class LohostDaemon {
     socket: Socket,
     head: Buffer
   ): void {
-    const subdomain = this.extractSubdomain(req.headers.host);
+    // Check X-Lohost-Host first, then fall back to Host header
+    const routingHost = (req.headers["x-lohost-host"] as string | undefined) || req.headers.host;
+
+    const subdomain = this.extractSubdomain(routingHost);
     if (!subdomain) {
       socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
       socket.destroy();
