@@ -32,12 +32,20 @@ const PLATFORM_PACKAGES: Record<string, string> = {
 
 /**
  * Get path to native DNS interposition library.
- * Tries to load from platform-specific npm package first,
- * then falls back to local native/ directory for development.
+ * Priority order:
+ * 1. LOHOST_NATIVE_LIB environment variable (for Nix/custom installs)
+ * 2. Platform-specific npm package (@lohost/darwin-arm64, etc.)
+ * 3. Local native/ directory (development mode)
  */
 function getNativeLibPath(): string | null {
   const plat = platform();
   const ar = arch();
+
+  // 1. Check environment variable (Nix flake sets this)
+  const envLib = process.env.LOHOST_NATIVE_LIB;
+  if (envLib && existsSync(envLib)) {
+    return envLib;
+  }
 
   // Map node arch names to package names
   const archMap: Record<string, string> = {
@@ -54,7 +62,7 @@ function getNativeLibPath(): string | null {
   const ext = plat === "darwin" ? "dylib" : "so";
   const libName = `liblohost_dns.${ext}`;
 
-  // Try to load from npm package
+  // 2. Try to load from npm package
   try {
     const require = createRequire(import.meta.url);
     const pkgPath = require.resolve(`${pkgName}/package.json`);
@@ -67,7 +75,7 @@ function getNativeLibPath(): string | null {
     // Package not installed, try local development path
   }
 
-  // Fallback: local native/ directory (development mode)
+  // 3. Fallback: local native/ directory (development mode)
   try {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const localPath = join(__dirname, "..", "native", libName);
