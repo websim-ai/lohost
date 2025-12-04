@@ -49,8 +49,55 @@ jobs:
           name: native-${{ matrix.target }}
           path: native/liblohost_dns.${{ matrix.ext }}
 
+  build-binary:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+          - os: macos-13
+            target: darwin-x64
+          - os: ubuntu-latest
+            target: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build standalone binary
+        run: bun build --compile --outfile lohost-${{ matrix.target }} src/index.ts
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: lohost-${{ matrix.target }}
+
+  build-binary-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build standalone binary for linux-arm64
+        run: bun build --compile --target=bun-linux-arm64 --outfile lohost-linux-arm64 src/index.ts
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-linux-arm64
+          path: lohost-linux-arm64
+
   publish:
-    needs: build-native
+    needs: [build-native, build-binary, build-binary-linux-arm64]
     runs-on: ubuntu-latest
 
     steps:
@@ -94,7 +141,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   create-release:
-    needs: publish
+    needs: [publish, build-binary, build-binary-linux-arm64]
     runs-on: ubuntu-latest
 
     steps:
@@ -105,19 +152,32 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create tarballs
+      - name: Prepare release assets
         run: |
+          mkdir -p release
+
+          # Copy binaries
           for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            mkdir -p release/$target
-            cp artifacts/native-$target/* release/$target/
-            tar -czvf lohost-$target.tar.gz -C release $target
+            cp artifacts/binary-$target/lohost-$target release/
+            chmod +x release/lohost-$target
           done
+
+          # Copy native libraries
+          for target in darwin-arm64 darwin-x64; do
+            cp artifacts/native-$target/liblohost_dns.dylib release/liblohost_dns-$target.dylib
+          done
+          for target in linux-x64 linux-arm64; do
+            cp artifacts/native-$target/liblohost_dns.so release/liblohost_dns-$target.so
+          done
+
+          ls -la release/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            lohost-*.tar.gz
+            release/lohost-*
+            release/liblohost_dns-*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

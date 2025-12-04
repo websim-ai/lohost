@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 dist/
+lohost-bin
+result
 
 # Compiled native libraries (build from source)
 native/*.dylib

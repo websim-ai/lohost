@@ -9,9 +9,10 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:bin": "bun build --compile --outfile lohost-bin src/index.ts",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist lohost-bin",
     "prepublishOnly": "npm run build"
   },
   "files": [
