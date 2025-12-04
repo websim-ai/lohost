@@ -246,7 +246,16 @@ export class LohostClient {
   }
 
   private spawnDaemon(): void {
-    const child = spawn(process.execPath, [process.argv[1], "daemon"], {
+    // Detect if running as compiled binary vs node script
+    // Node script: argv = ["/path/to/node", "/path/to/script.js", "-n", ...]
+    // Compiled binary: argv = ["/path/to/binary", "-n", ...]
+    const isScript = process.argv[1]?.match(/\.[jt]s$/);
+
+    const args = isScript
+      ? [process.argv[1], "daemon"]  // node <script> daemon
+      : ["daemon"];                   // <binary> daemon
+
+    const child = spawn(process.execPath, args, {
       detached: true,
       stdio: "ignore",
       env: { ...process.env, LOHOST_PORT: String(this.daemonPort) },
