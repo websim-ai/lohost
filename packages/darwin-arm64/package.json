@@ -1,0 +1,13 @@
+{
+  "name": "@lohost/darwin-arm64",
+  "version": "0.0.1",
+  "description": "lohost native DNS library for macOS ARM64 (Apple Silicon)",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["liblohost_dns.dylib"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/websim-ai/lohost.git"
+  },
+  "license": "MIT"
+}

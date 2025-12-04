@@ -4,9 +4,14 @@ node_modules/
 # Build output
 dist/
 
-# Compiled dylibs (build from source)
+# Compiled native libraries (build from source)
+native/*.dylib
+native/*.so
 dylib/*.dylib
 dylib/test_c
+
+# Platform package binaries (added by CI)
+packages/*/liblohost_dns.*
 
 # macOS
 .DS_Store

@@ -2,6 +2,7 @@
  * lohost client - UDS proxy + daemon interaction
  *
  * Creates a UDS socket, registers with lohostd, proxies to TCP.
+ * Handles native DNS interposition library loading for child processes.
  */
 
 import {
@@ -11,11 +12,88 @@ import {
   type Server,
 } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
-import { unlinkSync } from "node:fs";
+import { unlinkSync, existsSync } from "node:fs";
 import { request } from "node:http";
+import { platform, arch } from "node:os";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_DAEMON_PORT = 8080;
 const DEFAULT_SOCKET_DIR = "/tmp";
+
+// Platform-specific npm package mapping
+const PLATFORM_PACKAGES: Record<string, string> = {
+  "darwin-arm64": "@lohost/darwin-arm64",
+  "darwin-x64": "@lohost/darwin-x64",
+  "linux-x64": "@lohost/linux-x64",
+  "linux-arm64": "@lohost/linux-arm64",
+};
+
+/**
+ * Get path to native DNS interposition library.
+ * Tries to load from platform-specific npm package first,
+ * then falls back to local native/ directory for development.
+ */
+function getNativeLibPath(): string | null {
+  const plat = platform();
+  const ar = arch();
+
+  // Map node arch names to package names
+  const archMap: Record<string, string> = {
+    arm64: "arm64",
+    x64: "x64",
+  };
+
+  const normalizedArch = archMap[ar];
+  if (!normalizedArch) return null;
+
+  const pkgName = PLATFORM_PACKAGES[`${plat}-${normalizedArch}`];
+  if (!pkgName) return null;
+
+  const ext = plat === "darwin" ? "dylib" : "so";
+  const libName = `liblohost_dns.${ext}`;
+
+  // Try to load from npm package
+  try {
+    const require = createRequire(import.meta.url);
+    const pkgPath = require.resolve(`${pkgName}/package.json`);
+    const pkgDir = dirname(pkgPath);
+    const libPath = join(pkgDir, libName);
+    if (existsSync(libPath)) {
+      return libPath;
+    }
+  } catch {
+    // Package not installed, try local development path
+  }
+
+  // Fallback: local native/ directory (development mode)
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const localPath = join(__dirname, "..", "native", libName);
+    if (existsSync(localPath)) {
+      return localPath;
+    }
+  } catch {
+    // Not in development mode
+  }
+
+  return null;
+}
+
+/**
+ * Get environment variables for DNS interposition.
+ * Returns empty object if native library not available.
+ */
+function getPreloadEnv(): Record<string, string> {
+  const libPath = getNativeLibPath();
+  if (!libPath) return {};
+
+  const envVar =
+    platform() === "darwin" ? "DYLD_INSERT_LIBRARIES" : "LD_PRELOAD";
+
+  return { [envVar]: libPath };
+}
 
 interface ClientOptions {
   name: string;
@@ -223,8 +301,11 @@ export class LohostClient {
 
   private spawnChild(command: string, args: string[]): Promise<number> {
     return new Promise((resolve) => {
+      // Get DNS interposition env vars (DYLD_INSERT_LIBRARIES or LD_PRELOAD)
+      const preloadEnv = getPreloadEnv();
+
       this.child = spawn(command, args, {
-        env: { ...process.env, PORT: String(this.tcpPort) },
+        env: { ...process.env, ...preloadEnv, PORT: String(this.tcpPort) },
         stdio: "inherit",
       });
 
@@ -324,4 +405,28 @@ export async function checkDaemonRunning(
     });
     req.end();
   });
+}
+
+/**
+ * Check if native DNS interposition is available for current platform.
+ */
+export function hasNativeDnsSupport(): boolean {
+  return getNativeLibPath() !== null;
+}
+
+/**
+ * Get info about native DNS support for CLI status display.
+ */
+export function getNativeDnsInfo(): {
+  available: boolean;
+  path: string | null;
+  platform: string;
+  arch: string;
+} {
+  return {
+    available: hasNativeDnsSupport(),
+    path: getNativeLibPath(),
+    platform: platform(),
+    arch: arch(),
+  };
 }

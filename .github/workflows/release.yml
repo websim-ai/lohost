@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-native:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+            ext: dylib
+          - os: macos-13
+            target: darwin-x64
+            ext: dylib
+          - os: ubuntu-latest
+            target: linux-x64
+            ext: so
+          - os: ubuntu-latest
+            target: linux-arm64
+            ext: so
+            cross: true
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build native library
+        run: |
+          cd native
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            # Cross-compile for ARM64
+            sudo apt-get update
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            aarch64-linux-gnu-gcc -shared -fPIC \
+              -o liblohost_dns.so linux/lohost_dns.c -ldl
+          else
+            chmod +x build.sh
+            ./build.sh ${{ matrix.target }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: native/liblohost_dns.${{ matrix.ext }}
+
+  publish:
+    needs: build-native
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare platform packages
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            echo "Preparing $target..."
+            cp artifacts/native-$target/* packages/$target/
+            ls -la packages/$target/
+          done
+
+      - name: Publish platform packages
+        run: |
+          for dir in packages/*/; do
+            echo "Publishing $dir..."
+            cd "$dir"
+            npm publish --access public || echo "Failed to publish $dir (may already exist)"
+            cd ../..
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install dependencies and build
+        run: npm ci && npm run build
+
+      - name: Publish main package
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  create-release:
+    needs: publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create tarballs
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            mkdir -p release/$target
+            cp artifacts/native-$target/* release/$target/
+            tar -czvf lohost-$target.tar.gz -C release $target
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            lohost-*.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

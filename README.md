@@ -55,9 +55,19 @@ lohost -n api ./start.sh
 4. Routing uses the **rightmost** subdomain as the project name:
    - `user1.myapp.localhost` → project "myapp" (subdomain preserved)
 
+## Platform Support
+
+| Platform | DNS Mechanism | Status |
+|----------|---------------|--------|
+| macOS ARM64 (Apple Silicon) | `DYLD_INSERT_LIBRARIES` | ✅ |
+| macOS x64 (Intel) | `DYLD_INSERT_LIBRARIES` | ✅ |
+| Linux x64 | `LD_PRELOAD` | ✅ |
+| Linux ARM64 | `LD_PRELOAD` | ✅ |
+| Windows | N/A | ❌ Not supported |
+
 ## DNS Resolution
 
-macOS doesn't resolve `*.localhost` by default. lohost includes a DYLD interposition library that makes `*.localhost` resolve to `127.0.0.1` for any program.
+macOS and Linux don't always resolve `*.localhost` correctly. lohost includes native DNS interposition libraries that make `*.localhost` resolve to `127.0.0.1` for any program.
 
 ### Automatic DNS (Recommended)
 
@@ -67,39 +77,27 @@ When running commands through lohost, DNS interception is automatic:
 lohost -n myapp npm run dev  # DNS just works
 ```
 
-### Manual DNS for Standalone Programs
-
-For programs not launched through lohost:
-
-```bash
-# Set environment variable
-export DYLD_INSERT_LIBRARIES=/path/to/lohost/dylib/liblohost_dns_full.dylib
-
-# Now any program will resolve *.localhost to 127.0.0.1
-node my-script.js
-python my-script.py
-bun my-script.ts
-```
-
 ### DNS Compatibility
 
 | Runtime | Status | Notes |
 |---------|--------|-------|
 | Node.js | ✅ Works | Via `getaddrinfo` hook |
 | Python | ✅ Works | Via `getaddrinfo` hook |
-| Bun | ✅ Works | Via `dlsym` hook for async DNS |
-| Ruby (Homebrew) | ✅ Works | Via `getaddrinfo` hook |
+| Bun | ✅ Works | Via `dlsym` hook for async DNS (macOS) |
+| Ruby | ✅ Works | Via `getaddrinfo` hook |
 | C/C++/Rust | ✅ Works | Via `getaddrinfo` hook |
 | curl 8.x | ✅ Native | Has RFC 6761 support built-in |
 | Go | ⚠️ Limited | Static DNS, needs `CGO_ENABLED=1` |
-| System binaries | ❌ SIP | `/usr/bin/*` blocked by macOS SIP |
+| System binaries | ❌ SIP | macOS `/usr/bin/*` blocked by SIP |
 
 ### Debug DNS
 
 ```bash
-LOHOST_DEBUG=1 DYLD_INSERT_LIBRARIES=./dylib/liblohost_dns_full.dylib node -e \
+# macOS
+LOHOST_DEBUG=1 lohost -n test node -e \
   "require('dns').lookup('test.localhost', console.log)"
-# [lohost-dns] getaddrinfo: intercepted test.localhost -> 127.0.0.1
+
+# Output: [lohost-dns] getaddrinfo: intercepted test.localhost -> 127.0.0.1
 ```
 
 ## Commands
@@ -144,14 +142,56 @@ lohost help                # Show help
 | `user1.myapp.localhost:8080` | project "myapp" (subdomain passed through) |
 | `api.localhost:8080` | project "api" |
 
-## API Endpoints
+## API
 
-The daemon exposes a REST API at `/_lohost/`:
+The daemon exposes a JSON API at `/_lohost/`:
 
-```bash
-curl localhost:8080/_lohost/health      # Health check
-curl localhost:8080/_lohost/services    # List services
-open http://lohost.localhost:8080       # Dashboard
+### GET /_lohost/health
+
+```json
+{
+  "status": "ok",
+  "version": "0.0.1",
+  "uptime": 12345,
+  "services": 3
+}
+```
+
+### GET /_lohost/services
+
+```json
+[
+  {
+    "name": "frontend",
+    "port": 10000,
+    "socketPath": "/tmp/frontend.sock",
+    "url": "http://frontend.localhost:8080",
+    "registeredAt": "2024-12-04T00:00:00Z"
+  }
+]
+```
+
+### GET /_lohost/services/:name
+
+```json
+{
+  "name": "frontend",
+  "port": 10000,
+  "socketPath": "/tmp/frontend.sock",
+  "url": "http://frontend.localhost:8080",
+  "registeredAt": "2024-12-04T00:00:00Z"
+}
+```
+
+### GET /_lohost/config
+
+```json
+{
+  "version": "0.0.1",
+  "port": 8080,
+  "routeDomain": "localhost",
+  "socketDir": "/tmp"
+}
 ```
 
 ## Framework Integration
@@ -174,40 +214,18 @@ port = int(os.environ.get('PORT', 8000))
 python -m http.server ${PORT:-8000}
 ```
 
-## Cloudflare Workers / workerd
-
-Cloudflare's workerd runtime can't resolve `*.localhost`. Use undici with a custom DNS lookup:
-
-```typescript
-import { Agent, setGlobalDispatcher, fetch as undiciFetch } from 'undici';
-
-const dnsRewriteAgent = new Agent({
-  connect: {
-    lookup: (hostname, options, callback) => {
-      if (hostname.endsWith('.localhost')) {
-        callback(null, [{ address: '127.0.0.1', family: 4 }]);
-        return;
-      }
-      lookup(hostname, { ...options, all: true }, callback);
-    },
-  },
-});
-
-setGlobalDispatcher(dnsRewriteAgent);
-```
-
-## Building
+## Building from Source
 
 ```bash
-# TypeScript
+# Clone and install
+git clone https://github.com/websim-ai/lohost.git
+cd lohost
 npm install
 npm run build
 
-# DNS dylib (macOS only)
-cd dylib
-clang -dynamiclib -arch arm64 -arch x86_64 \
-  -isysroot $(xcrun --show-sdk-path) \
-  -o liblohost_dns_full.dylib lohost_dns_full.c
+# Build native DNS library for current platform
+cd native
+./build.sh
 ```
 
 ## Architecture
@@ -218,25 +236,34 @@ lohost/
 │   ├── index.ts      # CLI entry point
 │   ├── daemon.ts     # HTTP proxy daemon
 │   └── client.ts     # Client that runs commands
-├── dylib/
-│   ├── lohost_dns_full.c      # DNS interposition (macOS)
-│   └── liblohost_dns_full.dylib
+├── native/
+│   ├── darwin/       # macOS DNS interposition
+│   │   └── lohost_dns.c
+│   ├── linux/        # Linux DNS interposition
+│   │   └── lohost_dns.c
+│   └── build.sh      # Build script
+├── packages/         # Platform-specific npm packages
+│   ├── darwin-arm64/
+│   ├── darwin-x64/
+│   ├── linux-x64/
+│   └── linux-arm64/
 └── dist/             # Compiled JS
 ```
 
 ### DNS Interposition Design
 
-The dylib uses Mach-O `__DATA,__interpose` section to hook:
-
+**macOS**: Uses Mach-O `__DATA,__interpose` section to hook:
 1. **`getaddrinfo`** - Synchronous DNS (Node.js, Python, C)
 2. **`dlsym`** - Intercepts Bun loading `getaddrinfo_async_start`
+
+**Linux**: Uses `LD_PRELOAD` with `dlsym(RTLD_NEXT, ...)` to hook `getaddrinfo`.
 
 When a `*.localhost` lookup occurs, it returns `127.0.0.1` immediately. All other domains fall through to real DNS.
 
 ## Requirements
 
 - Node.js 18+
-- macOS (DNS dylib is macOS-specific)
+- macOS or Linux
 
 ## License
 
